@@ -124,6 +124,7 @@ function snippetStorageKey(url) {
 
 function slugify(title) {
   return title
+    .replace(/^\(\d+\)\s*/, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")

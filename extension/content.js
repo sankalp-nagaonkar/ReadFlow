@@ -434,6 +434,7 @@
 
       audio.setTotalSentences(sentences.length);
       buildSentenceRanges(sentences);
+      window.getSelection().removeAllRanges();
 
       audio.onSentenceStart = (index) => {
         setActiveSentence(index);
