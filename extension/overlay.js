@@ -16,7 +16,9 @@ class SpeakOverlay {
     this.onVoiceChange = null;
     this.onFocusToggle = null;
     this.onClose = null;
+    this.onSaveNote = null;
     this.focusMode = false;
+    this._noteResolve = null;
   }
 
   async fetchVoices() {
@@ -47,6 +49,11 @@ class SpeakOverlay {
         <div class="top-bar" id="drag-handle">
           <span class="time-remaining" id="time"><span class="time-value">0:00</span> left</span>
           <div class="top-spacer"></div>
+          <button class="btn win-btn" id="note-btn" title="Jot a note (⌘J)">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+            </svg>
+          </button>
           <button class="btn win-btn" id="collapse-btn" title="Minimize">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="5" y1="12" x2="19" y2="12"/>
@@ -110,7 +117,6 @@ class SpeakOverlay {
               </button>
               <div class="voice-dropdown" id="voice-dropdown"></div>
             </div>
-            <div class="separator-v"></div>
             <button class="btn toggle-btn" id="focus-btn">
               <span class="toggle-label">Focus Mode</span>
               <span class="toggle-track" id="focus-track">
@@ -227,7 +233,7 @@ class SpeakOverlay {
 
     // Close dropdown on outside click
     this.shadow.addEventListener("click", () => {
-      $("voice-dropdown").classList.remove("open");
+      $("voice-dropdown")?.classList.remove("open");
     });
 
     // Focus mode
@@ -242,13 +248,22 @@ class SpeakOverlay {
     $("collapse-btn").addEventListener("click", () => this._toggleMini(true));
     $("expand-btn").addEventListener("click", () => this._toggleMini(false));
 
+    // Note
+    $("note-btn").addEventListener("click", () => this.onSaveNote?.());
+
     // Close
     $("close-btn").addEventListener("click", () => this.onClose?.());
     $("mini-close-btn").addEventListener("click", () => this.onClose?.());
 
-    // Dragging
+
+    // Dragging — both full and mini mode
     const handle = $("drag-handle");
+    const miniBar = $("mini-controls");
     handle.addEventListener("mousedown", (e) => this._startDrag(e));
+    miniBar.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button")) return;
+      this._startDrag(e);
+    });
     document.addEventListener("mousemove", (e) => this._onDrag(e));
     document.addEventListener("mouseup", () => this._endDrag());
   }
@@ -299,7 +314,9 @@ class SpeakOverlay {
     this.mini = mini;
     this.shadow.getElementById("drag-handle").style.display = mini ? "none" : "";
     this.shadow.getElementById("controls").style.display = mini ? "none" : "";
-    this.shadow.getElementById("mini-controls").style.display = mini ? "" : "none";
+    const mc = this.shadow.getElementById("mini-controls");
+    mc.style.display = mini ? "" : "none";
+    this.shadow.getElementById("overlay").style.width = mini ? "auto" : "";
   }
 
   setPlayState(playing) {
@@ -355,7 +372,126 @@ class SpeakOverlay {
     }
   }
 
+  _noteModalCSS(isDark) {
+    return `* { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+        display: flex; align-items: center; justify-content: center;
+        min-height: 100vh; background: rgba(0,0,0,0.4);
+      }
+      .modal {
+        background: ${isDark ? "rgba(35,35,35,0.97)" : "rgba(255,255,255,0.97)"};
+        border: 1px solid ${isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)"};
+        border-radius: 14px;
+        box-shadow: ${isDark ? "0 12px 40px rgba(0,0,0,0.4)" : "0 12px 40px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06)"};
+        width: 380px; max-width: 90vw; padding: 16px;
+        display: flex; flex-direction: column; gap: 12px;
+        font-size: 13px; color: ${isDark ? "#e0e0e0" : "#1a1a1a"}; line-height: 1.4;
+      }
+      .header { display: flex; align-items: center; justify-content: space-between; }
+      .title { font-size: 13px; font-weight: 600; }
+      .close-btn {
+        background: none; border: none; cursor: pointer; padding: 4px;
+        color: ${isDark ? "#888" : "#666"}; border-radius: 6px;
+      }
+      .close-btn:hover { background: ${isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.05)"}; }
+      .sentence {
+        font-size: 12px; color: ${isDark ? "#aaa" : "#555"};
+        background: ${isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)"};
+        border-radius: 8px; padding: 10px 12px; max-height: 80px; overflow-y: auto;
+        line-height: 1.5; border-left: 3px solid ${isDark ? "#f05050" : "#dc3232"};
+      }
+      textarea {
+        width: 100%; border: 1px solid ${isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)"};
+        border-radius: 8px; padding: 10px 12px; font-size: 13px; font-family: inherit;
+        background: ${isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.02)"};
+        color: ${isDark ? "#e0e0e0" : "#1a1a1a"}; resize: vertical; outline: none;
+        transition: border-color 0.15s; line-height: 1.5;
+      }
+      textarea:focus { border-color: ${isDark ? "#f05050" : "#dc3232"}; }
+      .actions { display: flex; align-items: center; justify-content: space-between; }
+      .hint { font-size: 10px; color: #999; }
+      .save-btn {
+        background: ${isDark ? "#f05050" : "#dc3232"}; color: #fff; border: none;
+        border-radius: 8px; padding: 6px 16px; font-size: 12px; font-weight: 600;
+        cursor: pointer; transition: background 0.15s;
+      }
+      .save-btn:hover { background: ${isDark ? "#e04040" : "#c52a2a"}; }`;
+  }
+
+  showNoteModal(sentenceText) {
+    return new Promise((resolve) => {
+      this._noteResolve = resolve;
+      if (this._noteFrame) this._noteFrame.remove();
+
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+      const frame = document.createElement("iframe");
+      frame.style.cssText = "position:fixed;inset:0;width:100vw;height:100vh;border:none;z-index:2147483647;background:transparent;";
+      document.body.appendChild(frame);
+      this._noteFrame = frame;
+
+      const doc = frame.contentDocument;
+      const style = doc.createElement("style");
+      style.textContent = this._noteModalCSS(isDark);
+      doc.head.appendChild(style);
+
+      doc.body.innerHTML = `
+        <div class="modal">
+          <div class="header">
+            <span class="title">Save Note</span>
+            <button class="close-btn" id="cancel-btn">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+          <div class="sentence" id="note-sentence"></div>
+          <textarea id="note-input" placeholder="Add your thoughts (optional)..." rows="3"></textarea>
+          <div class="actions">
+            <span class="hint">Enter to save · Esc to cancel</span>
+            <button class="save-btn" id="save-btn">Save</button>
+          </div>
+        </div>`;
+
+      doc.getElementById("note-sentence").textContent = sentenceText;
+      const input = doc.getElementById("note-input");
+
+      const finish = (save) => {
+        const text = save ? (input.value.trim() || null) : undefined;
+        if (this._noteFrame) { this._noteFrame.remove(); this._noteFrame = null; }
+        if (this._noteResolve) { this._noteResolve(text); this._noteResolve = null; }
+      };
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finish(true); }
+        else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      });
+      doc.getElementById("save-btn").addEventListener("click", () => finish(true));
+      doc.getElementById("cancel-btn").addEventListener("click", () => finish(false));
+      doc.body.addEventListener("click", (e) => { if (e.target === doc.body) finish(false); });
+
+      input.focus();
+    });
+  }
+
+  _hideNoteModal(save) {
+    if (this._noteFrame) {
+      this._noteFrame.remove();
+      this._noteFrame = null;
+    }
+    if (this._noteResolve) {
+      this._noteResolve(save ? null : undefined);
+      this._noteResolve = null;
+    }
+  }
+
   destroy() {
+    if (this._noteFrame) { this._noteFrame.remove(); this._noteFrame = null; }
+    if (this._noteResolve) {
+      this._noteResolve(undefined);
+      this._noteResolve = null;
+    }
     if (this.host) {
       this.host.remove();
       this.host = null;
@@ -481,6 +617,7 @@ class SpeakOverlay {
         padding-top: 8px;
         border-top: 1px solid rgba(0, 0, 0, 0.05);
         flex-wrap: wrap;
+        justify-content: space-between;
       }
       @media (prefers-color-scheme: dark) {
         .row-options { border-top-color: rgba(255, 255, 255, 0.06); }
@@ -658,8 +795,15 @@ class SpeakOverlay {
       .mini-controls {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 6px 8px;
+        gap: 6px;
+        padding: 5px 8px;
+        cursor: grab;
+      }
+      .mini-controls:active { cursor: grabbing; }
+      .mini-controls .play-pause {
+        width: 28px;
+        height: 28px;
+        margin: 0;
       }
       .mini-speed, .mini-voice {
         font-size: 11px;
@@ -673,6 +817,7 @@ class SpeakOverlay {
         color: #e88;
         text-align: center;
       }
+
     `;
   }
 }

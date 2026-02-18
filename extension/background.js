@@ -116,4 +116,69 @@ chrome.action.onClicked.addListener(async (tab) => {
   await triggerSpeak(tab);
 });
 
+// ── Snippet saving ──
+
+function snippetStorageKey(url) {
+  return "snippets:" + url;
+}
+
+function slugify(title) {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 50);
+}
+
+function buildMarkdown(title, url, snippets) {
+  let md = `# ${title}\n\n`;
+  md += `> ${url}\n\n---\n\n`;
+  for (let i = 0; i < snippets.length; i++) {
+    const s = snippets[i];
+    const time = new Date(s.timestamp).toLocaleString();
+    const link = s.highlightUrl || s.url || url;
+    md += `### [Snippet ${i + 1}](${link}) — ${time}\n\n`;
+    md += `> ${s.sentence}\n\n`;
+    if (s.note) md += `${s.note}\n\n`;
+    md += `---\n\n`;
+  }
+  return md;
+}
+
+async function saveSnippet(snippet) {
+  const key = snippetStorageKey(snippet.url);
+  const data = await chrome.storage.local.get(key);
+  const existing = data[key] || [];
+  existing.push(snippet);
+  await chrome.storage.local.set({ [key]: existing });
+
+  const md = buildMarkdown(snippet.title, snippet.url, existing);
+  const filename = `ReadFlow Snippets/${slugify(snippet.title)}.md`;
+
+  const blob = new Blob([md], { type: "text/markdown" });
+  const reader = new FileReader();
+  reader.onload = () => {
+    chrome.downloads.download({
+      url: reader.result,
+      filename,
+      conflictAction: "overwrite",
+      saveAs: false,
+    }, (id) => {
+      if (chrome.runtime.lastError) {
+        slog(`Download error: ${chrome.runtime.lastError.message}`);
+      } else {
+        slog(`Snippet saved: ${filename} (${existing.length} total, download ${id})`);
+      }
+    });
+  };
+  reader.readAsDataURL(blob);
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === "save-snippet" && msg.snippet) {
+    saveSnippet(msg.snippet);
+    sendResponse({ ok: true });
+  }
+});
+
 slog("Background service worker started");

@@ -1,4 +1,5 @@
 (() => {
+
   let audio = null;
   let overlay = null;
   let active = false;
@@ -476,6 +477,8 @@
         else removeFocusMode();
       };
 
+      overlay.onSaveNote = () => takeNote();
+
       overlay.onClose = () => shutdown();
 
       const port = chrome.runtime.connect({ name: "speak-blogs-tts" });
@@ -519,16 +522,76 @@
     overlay?.destroy();
     clearHighlights();
     removeFocusMode();
+    noteTaking = false;
     currentPort = null;
     audio = null;
     overlay = null;
     savedSelectionRange = null;
   }
 
+  // ── Text fragment URL ──
+
+  function textFragmentForSentence(sentence) {
+    const clean = sentence.replace(/\s+/g, " ").trim();
+    if (!clean) return "";
+    const words = clean.split(" ");
+    if (words.length <= 8) {
+      return encodeURIComponent(clean);
+    }
+    const start = words.slice(0, 4).join(" ");
+    const end = words.slice(-4).join(" ");
+    return `${encodeURIComponent(start)},${encodeURIComponent(end)}`;
+  }
+
   // ── Keyboard shortcuts ──
 
-  document.addEventListener("keydown", (e) => {
+  let noteTaking = false;
+
+  async function takeNote() {
+    if (noteTaking || !active || !audio || !overlay) return;
+    noteTaking = true;
+    const wasPlaying = audio.playing;
+    if (wasPlaying) audio.pause();
+    overlay.setPlayState(false);
+
+    const sentence = allSentences[audio.currentIndex] || "";
+    const userNote = await overlay.showNoteModal(sentence);
+
+    noteTaking = false;
+    if (userNote !== undefined) {
+      const baseUrl = window.location.href.replace(/#.*$/, "");
+      const fragment = textFragmentForSentence(sentence);
+      const snippet = {
+        sentence,
+        note: userNote,
+        url: baseUrl,
+        highlightUrl: fragment ? `${baseUrl}#:~:text=${fragment}` : baseUrl,
+        title: document.title,
+        timestamp: new Date().toISOString(),
+        sentenceIndex: audio.currentIndex,
+      };
+      chrome.runtime.sendMessage({ action: "save-snippet", snippet });
+      overlay.showStatus("Note saved");
+      slog(`Note saved for sentence ${audio.currentIndex}`);
+    }
+
+    if (wasPlaying) {
+      audio.play();
+      overlay.setPlayState(true);
+    }
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (noteTaking) return;
     if (!active || !audio || !overlay) return;
+
+    if ((e.metaKey || e.ctrlKey) && e.code === "KeyJ") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      takeNote();
+      return;
+    }
+
     const tag = e.target.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable) return;
 
@@ -560,7 +623,7 @@
         shutdown();
         break;
     }
-  });
+  }, true);
 
   // ── Logging ──
 

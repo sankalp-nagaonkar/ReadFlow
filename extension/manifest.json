@@ -3,7 +3,7 @@
   "name": "Speak Blogs",
   "version": "1.0.0",
   "description": "Highlight text and hear it read aloud with natural AI voices",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "downloads", "storage"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_title": "Speak Blogs - Read selected text aloud"
