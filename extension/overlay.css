@@ -1,0 +1,15 @@
+/* CSS Custom Highlight API — works across any DOM structure */
+::highlight(speak-blogs-active) {
+  background-color: rgba(220, 50, 50, 0.1);
+  text-decoration: underline;
+  text-decoration-color: rgba(220, 50, 50, 0.5);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  ::highlight(speak-blogs-active) {
+    background-color: rgba(240, 80, 80, 0.12);
+    text-decoration-color: rgba(240, 80, 80, 0.6);
+  }
+}

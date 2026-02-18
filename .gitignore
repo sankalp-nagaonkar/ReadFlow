@@ -1,0 +1,17 @@
+# Python
+server/.venv/
+server/__pycache__/
+*.pyc
+
+# Model files (large, downloaded by start.sh)
+server/kokoro-v1.0.onnx
+server/voices-v1.0.bin
+
+# CoreML cache
+server/.coreml_cache/
+
+# macOS
+.DS_Store
+
+# Logs
+/tmp/speak_blogs.log
