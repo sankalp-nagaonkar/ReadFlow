@@ -215,8 +215,23 @@
   }
 
   let scrollAnim = null;
+  let userScrolling = false;
+  let userScrollTimer = null;
+  const USER_SCROLL_COOLDOWN = 3000;
+
+  window.addEventListener("wheel", onUserScroll, { passive: true });
+  window.addEventListener("touchmove", onUserScroll, { passive: true });
+
+  function onUserScroll() {
+    if (!active) return;
+    userScrolling = true;
+    if (scrollAnim) { cancelAnimationFrame(scrollAnim); scrollAnim = null; }
+    clearTimeout(userScrollTimer);
+    userScrollTimer = setTimeout(() => { userScrolling = false; }, USER_SCROLL_COOLDOWN);
+  }
 
   function smoothScrollTo(targetY, duration = 600) {
+    if (userScrolling) return;
     if (scrollAnim) cancelAnimationFrame(scrollAnim);
     const startY = window.scrollY;
     const dist = targetY - startY;
@@ -224,6 +239,7 @@
     const startTime = performance.now();
 
     function step(now) {
+      if (userScrolling) { scrollAnim = null; return; }
       const t = Math.min((now - startTime) / duration, 1);
       const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
       window.scrollTo(0, startY + dist * ease);
@@ -239,6 +255,7 @@
       const r = sentenceRanges[index];
       if (r) {
         CSS.highlights.set("speak-blogs-active", new Highlight(r));
+        if (userScrolling) return;
         const rect = r.getBoundingClientRect();
         const vh = window.innerHeight;
         const topZone = vh * 0.25;
@@ -437,7 +454,7 @@
 
       overlay.onSkip = (delta) => {
         const target = Math.max(0, Math.min(allSentences.length - 1, audio.currentIndex + delta));
-        if (!audio.buffers.has(target) && target > fetchedUpTo) {
+        if (!audio.buffers.has(target)) {
           fetchedUpTo = target - 1;
           sendBatch(target, overlay.currentSpeed);
         }

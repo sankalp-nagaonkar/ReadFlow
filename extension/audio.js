@@ -1,4 +1,6 @@
 class AudioEngine {
+  static MAX_BUFFERS = 40;
+
   constructor() {
     this.ctx = null;
     this.buffers = new Map();
@@ -52,6 +54,17 @@ class AudioEngine {
     }
   }
 
+  _evictBuffers(centerIndex) {
+    for (const idx of this.buffers.keys()) {
+      if (idx < centerIndex - 20 || idx > centerIndex + 20) this.buffers.delete(idx);
+    }
+    if (this.buffers.size <= AudioEngine.MAX_BUFFERS) return;
+    const behind = [...this.buffers.keys()].filter(i => i < centerIndex).sort((a, b) => a - b);
+    while (this.buffers.size > AudioEngine.MAX_BUFFERS && behind.length) {
+      this.buffers.delete(behind.shift());
+    }
+  }
+
   playSentence(index) {
     if (index < 0 || index >= this.totalSentences) return;
     if (!this.buffers.has(index)) {
@@ -89,6 +102,7 @@ class AudioEngine {
     this.pausedAt = 0;
     this.startedAt = this.ctx.currentTime;
     source.start(0);
+    this._evictBuffers(index);
 
     this.onSentenceStart?.(index);
     this.onProgress?.(index, this.totalSentences);
