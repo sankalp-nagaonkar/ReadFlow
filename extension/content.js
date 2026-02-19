@@ -6,7 +6,7 @@
   let allSentences = [];
   let currentPort = null;
   let requestId = 0;
-  let fetchedUpTo = -1;
+  let pendingIndices = new Set();
   let totalWordCount = 0;
   let wordsPerSentence = [];
   let focusEl = null;
@@ -340,42 +340,69 @@
 
   // ── Batching / pipeline ──
 
-  function sendBatch(fromIndex, speed) {
-    if (!currentPort || fromIndex >= allSentences.length) return;
-    if (fromIndex <= fetchedUpTo) return;
-    const toIndex = Math.min(fromIndex + BATCH, allSentences.length);
-    const batch = allSentences.slice(fromIndex, toIndex);
-    fetchedUpTo = toIndex - 1;
-    slog(`Batch [${fromIndex}..${toIndex - 1}] reqId=${requestId} speed=${speed}`);
+  function cancelInflight() {
+    requestId++;
+    pendingIndices.clear();
+    if (currentPort) currentPort.postMessage({ type: "cancel" });
+  }
+
+  function sendBatchFor(indices, speed) {
+    if (!currentPort || !indices.length) return;
+    const sorted = [...indices].sort((a, b) => a - b);
+
+    let batchStart = sorted[0];
+    let batch = [];
+    for (const idx of sorted) {
+      if (batch.length && idx !== batchStart + batch.length) {
+        dispatchBatch(batchStart, batch, speed);
+        batchStart = idx;
+        batch = [];
+      }
+      batch.push(allSentences[idx]);
+      pendingIndices.add(idx);
+    }
+    if (batch.length) dispatchBatch(batchStart, batch, speed);
+  }
+
+  function dispatchBatch(startIndex, sentences, speed) {
+    slog(`Batch [${startIndex}..${startIndex + sentences.length - 1}] reqId=${requestId} speed=${speed}`);
     currentPort.postMessage({
       type: "send-sentences",
-      sentences: batch,
+      sentences,
       voice: overlay.currentVoice,
       speed,
-      startIndex: fromIndex,
+      startIndex,
       requestId,
     });
   }
 
-  function prefetch(triggerIndex, speed) {
-    if (fetchedUpTo < allSentences.length - 1 && triggerIndex + 2 >= fetchedUpTo) {
-      sendBatch(fetchedUpTo + 1, speed);
+  function needsForIndex(idx) {
+    return idx >= 0 && idx < allSentences.length &&
+      !audio.buffers.has(idx) && !pendingIndices.has(idx);
+  }
+
+  function requestAroundIndex(centerIndex, speed) {
+    if (!currentPort || centerIndex < 0) return;
+    const needed = [];
+    for (let i = centerIndex; i < Math.min(centerIndex + BATCH, allSentences.length); i++) {
+      if (needsForIndex(i)) needed.push(i);
     }
+    if (needed.length) sendBatchFor(needed, speed);
+  }
+
+  function prefetch(triggerIndex, speed) {
+    requestAroundIndex(triggerIndex, speed);
   }
 
   function cancelAndRegenerate(newSpeed) {
     if (!currentPort || !audio || !allSentences.length) return;
     const idx = Math.max(0, audio.currentIndex);
 
-    requestId++;
-    currentPort.postMessage({ type: "cancel" });
+    cancelInflight();
 
-    // Don't pause — keep playing state, just clear future buffers
     for (let i = idx; i < allSentences.length; i++) audio.buffers.delete(i);
-    fetchedUpTo = idx - 1;
 
-    sendBatch(idx, newSpeed);
-    // Re-trigger play on current index so it picks up new audio when it arrives
+    requestAroundIndex(idx, newSpeed);
     audio.playSentence(idx);
     overlay.setPlayState(true);
   }
@@ -416,7 +443,7 @@
 
       active = true;
       allSentences = sentences;
-      fetchedUpTo = -1;
+      pendingIndices.clear();
       requestId++;
 
       wordsPerSentence = sentences.map(countWords);
@@ -457,8 +484,8 @@
       overlay.onSkip = (delta) => {
         const target = Math.max(0, Math.min(allSentences.length - 1, audio.currentIndex + delta));
         if (!audio.buffers.has(target)) {
-          fetchedUpTo = target - 1;
-          sendBatch(target, overlay.currentSpeed);
+          cancelInflight();
+          requestAroundIndex(target, overlay.currentSpeed);
         }
         audio.skipSentences(delta);
       };
@@ -488,21 +515,19 @@
       port.onMessage.addListener((msg) => {
         if (msg.type === "audio-chunk") {
           if (msg.requestId !== undefined && msg.requestId !== requestId) return;
+          pendingIndices.delete(msg.index);
           audio.addChunk(msg.index, base64ToArrayBuffer(msg.base64));
-          // Prefetch on chunk arrival too — don't wait for playback
-          prefetch(msg.index, overlay.currentSpeed);
+          prefetch(audio.currentIndex, overlay.currentSpeed);
         } else if (msg.type === "done") {
-          // Batch done — check if more needed
-          if (fetchedUpTo < allSentences.length - 1) {
-            sendBatch(fetchedUpTo + 1, overlay.currentSpeed);
-          }
+          prefetch(audio.currentIndex, overlay.currentSpeed);
         } else if (msg.type === "error") {
           slog(`Error: ${JSON.stringify(msg)}`);
+          if (msg.index !== undefined) pendingIndices.delete(msg.index);
           overlay.showStatus(msg.message || "TTS error");
         }
       });
 
-      sendBatch(0, overlay.currentSpeed);
+      requestAroundIndex(0, overlay.currentSpeed);
       overlay.setPlayState(true);
       updateProgress(0);
     } catch (err) {
@@ -515,7 +540,7 @@
     allSentences = [];
     wordsPerSentence = [];
     totalWordCount = 0;
-    fetchedUpTo = -1;
+    pendingIndices.clear();
     requestId++;
     audio?.stop();
     audio?.reset();

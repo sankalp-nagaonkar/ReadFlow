@@ -99,7 +99,53 @@ async def log_endpoint(msg: str = ""):
 @app.websocket("/ws")
 async def websocket_tts(ws: WebSocket):
     await ws.accept()
-    current_request_id = 0
+    state = {"active_id": 0}
+    gen_queue: asyncio.Queue = asyncio.Queue()
+
+    async def generator_loop():
+        """Pulls jobs from the queue and generates TTS, checking for cancellation
+        between each sentence so skips/cancel take effect immediately."""
+        tts = await get_tts()
+        loop = asyncio.get_event_loop()
+
+        while True:
+            job = await gen_queue.get()
+            if job is None:
+                break
+            sentences, voice, speed, start_idx, req_id = job
+
+            for i, sentence in enumerate(sentences):
+                if state["active_id"] != req_id:
+                    break
+                idx = start_idx + i
+                text = sentence.strip()
+                if not text:
+                    continue
+                try:
+                    wav_bytes = await loop.run_in_executor(
+                        tts_pool, generate_one, tts, text, voice, speed
+                    )
+                    if state["active_id"] != req_id:
+                        break
+                    header = struct.pack("<III", req_id, idx, len(wav_bytes))
+                    await ws.send_bytes(header + wav_bytes)
+                except Exception as e:
+                    if state["active_id"] != req_id:
+                        break
+                    await ws.send_text(json.dumps({
+                        "type": "error",
+                        "requestId": req_id,
+                        "index": idx,
+                        "message": str(e),
+                    }))
+
+            if state["active_id"] == req_id:
+                await ws.send_text(json.dumps({
+                    "type": "done",
+                    "requestId": req_id,
+                }))
+
+    gen_task = asyncio.create_task(generator_loop())
 
     try:
         while True:
@@ -107,7 +153,16 @@ async def websocket_tts(ws: WebSocket):
             msg = json.loads(data)
 
             if msg.get("type") == "cancel":
-                current_request_id += 1
+                state["active_id"] += 1
+                # Drain any queued jobs that are now stale
+                while not gen_queue.empty():
+                    try:
+                        gen_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                continue
+
+            if msg.get("type") != "send-sentences":
                 continue
 
             sentences = msg.get("sentences", [])
@@ -116,50 +171,13 @@ async def websocket_tts(ws: WebSocket):
             start_idx = msg.get("startIndex", 0)
             request_id = msg.get("requestId", 0)
 
-            current_request_id = request_id
+            state["active_id"] = request_id
 
             if not sentences:
                 await ws.send_text(json.dumps({"type": "error", "message": "No sentences"}))
                 continue
 
-            tts = await get_tts()
-            loop = asyncio.get_event_loop()
-
-            for i, sentence in enumerate(sentences):
-                # Check if this request was superseded
-                if current_request_id != request_id:
-                    break
-
-                idx = start_idx + i
-                text = sentence.strip()
-                if not text:
-                    continue
-
-                try:
-                    wav_bytes = await loop.run_in_executor(
-                        tts_pool, generate_one, tts, text, voice, speed
-                    )
-
-                    if current_request_id != request_id:
-                        break
-
-                    header = struct.pack("<III", request_id, idx, len(wav_bytes))
-                    await ws.send_bytes(header + wav_bytes)
-                except Exception as e:
-                    if current_request_id != request_id:
-                        break
-                    await ws.send_text(json.dumps({
-                        "type": "error",
-                        "requestId": request_id,
-                        "index": idx,
-                        "message": str(e),
-                    }))
-
-            if current_request_id == request_id:
-                await ws.send_text(json.dumps({
-                    "type": "done",
-                    "requestId": request_id,
-                }))
+            await gen_queue.put((sentences, voice, speed, start_idx, request_id))
 
     except WebSocketDisconnect:
         pass
@@ -167,6 +185,14 @@ async def websocket_tts(ws: WebSocket):
         try:
             await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
         except Exception:
+            pass
+    finally:
+        state["active_id"] = -1
+        await gen_queue.put(None)
+        gen_task.cancel()
+        try:
+            await gen_task
+        except (asyncio.CancelledError, Exception):
             pass
 
 

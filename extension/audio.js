@@ -44,10 +44,9 @@ class AudioEngine {
       const audioBuffer = await this.ctx.decodeAudioData(wavArrayBuffer.slice(0));
       this.buffers.set(index, audioBuffer);
 
-      if (this.currentIndex === -1 && index === 0) {
-        this.playSentence(0);
-      } else if (this.playing && this.currentSource === null && index === this.currentIndex) {
-        this.playSentence(this.currentIndex);
+      const waitingForThis = this.currentSource === null && index === this.currentIndex;
+      if ((this.currentIndex === -1 && index === 0) || waitingForThis) {
+        this.playSentence(waitingForThis ? this.currentIndex : 0);
       }
     } catch (e) {
       console.error("Failed to decode audio chunk", index, e);
